@@ -1,0 +1,24 @@
+# dsh-image-question bundle patch.
+#
+# M4 adds the attachment-fidelity override from design doc 3.2. It targets the
+# existing `attachment-local` row (id and name taken from
+# @deepseek-ai/dsh-base/cordis.patch.yml:118-119) and only sets that row's
+# `config`; no official file is edited. A non-insert patch replaces the named
+# key outright (cordis-plugin-include/lib/index.js:100-103), and that row
+# declares no config today, so the three keys below are the whole config.
+#
+# The live development profile boots with `--patch dev/patch.yml`, whose layer
+# is applied last (dsh/lib/profile-boot-*.js:256-260); dev/patch.yml repeats
+# these values verbatim, because this file is not read on that path.
+- id: attachment-local
+  config:
+    # 4194304 (2048x2048) -> 16777216 (4096x4096): a 4000x4000 source now fits
+    # the budget and is stored unstrided.
+    normalizedImageMaxPixels: 16777216
+    # Already the default; written out so the row is self-describing.
+    normalizedImageMaxDimension: 8192
+    # 4 MiB -> 16 MiB.
+    normalizedImageMaxBytes: 16777216
+- insert:
+    - id: image-question
+      name: 'dsh-image-question'

@@ -7,7 +7,7 @@
 
 ## 界面截图
 
-![实际界面](assets/实际截图.webp)
+![实际界面](ScreenShot.png)
 
 ---
 

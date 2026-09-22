@@ -5,6 +5,10 @@
 > Ask with an image, annotate in the browser, get back structured source-pixel coordinates.
 > Zero peer dependencies. No build step. Both halves are hand-written artifacts.
 
+## 界面截图
+
+![实际界面](assets/实际截图.webp)
+
 ---
 
 ## 1. 它解决什么

@@ -273,27 +273,26 @@ window.__ModuleLoader__.load({
 		const CSS_ELEMENT_ID = 'dsh-image-question-css';
 
 		/**
-		 * Plugin-owned dark surfaces (`UI差异与修改方案.md` v2, A1-A5, 2026-09-18).
+		 * Plugin-owned surfaces (`UI差异与修改方案.md` v2, A1-A5/C2, 2026-09-18) are
+		 * CSS VARIABLES now, declared by `ensureStyle()` and branched on the host's
+		 * own resolved-theme marker:
 		 *
-		 * `UI图.png` draws the whole card as ONE dark family. The host theme
-		 * variables this card used to read resolve to a LIGHT grey under the dark
-		 * theme in use — `--dsw-alias-bg-overlay` → `rgb(97,102,107)`,
-		 * `--dsw-specific-input-major` → `rgb(44,44,46)` — which is exactly why the
-		 * note field, the colour control and its palette panel rendered as light
-		 * blocks on a dark card (the same misreading M4 already fixed once for the
-		 * zoom plate).
+		 *   --dsh-iq-surface-card / -input / -control  card, note field, colour control + palette
+		 *   --dsh-iq-border-control                    their hairline
+		 *   --dsh-iq-label-caret                       the swatch caret
+		 *   --dsh-iq-zoom-plate / -plate-border        the zoom toolbar and its plate edge
+		 *   --dsh-iq-zoom-button                       the buttons' resting fill
+		 *   --dsh-iq-notice-surface                    the read-image failure notice
 		 *
-		 * These values are the figure's own samples and are DELIBERATELY
-		 * theme-independent: on a light host theme the card still renders dark. That
-		 * is the accepted trade-off for matching the figure; it is recorded in
-		 * `进度.md`. The zoom plate keeps its separately calibrated
-		 * `rgba(22,23,26,.98)`.
+		 * Values are here twice on purpose. The DARK branch is the frozen accepted
+		 * baseline sampled off `UI图.png`; the LIGHT branch is sampled off
+		 * `浅色主题-UI图.png`. `UI图.png` draws the whole card as ONE dark family,
+		 * which is why the card, the note field and the colour control used to be
+		 * hardcoded against the host theme; on a light host that read as a dark card
+		 * with light blocks in it. Living in CSS is what lets an ALREADY-MOUNTED
+		 * card follow a live theme switch — no React remount, no `matchMedia` probe,
+		 * no `MutationObserver`, no new host dependency.
 		 */
-		const SURFACE_CARD = 'rgb(20,21,24)';    // A1: the card itself
-		const SURFACE_INPUT = 'rgb(25,27,31)';   // A2: note field, one step above
-		const SURFACE_CONTROL = 'rgb(19,20,22)'; // A3/A5: colour control + its palette
-		const BORDER_CONTROL = 'rgb(44,46,49)';  // A3/A5: their hairline
-		const LABEL_CARET = 'rgb(120,190,235)';  // C2: the swatch caret
 
 		/** Resolve the browser's Host base with the connection carrier's null-origin fallback. */
 		function hostBase() {
@@ -516,6 +515,9 @@ window.__ModuleLoader__.load({
 		 * Hover and focus states cannot be expressed with inline styles, so the
 		 * few rules that need a pseudo-class live in one injected style element —
 		 * the same shape the official bundles use for their CSS modules.
+		 *
+		 * It also carries the plugin's theme variables. They are declared on the
+		 * plugin's own scope, so nothing here leaks into the host's stylesheet.
 		 */
 		function ensureStyle() {
 			if (typeof document === 'undefined') return;
@@ -524,11 +526,38 @@ window.__ModuleLoader__.load({
 			style.id = CSS_ELEMENT_ID;
 			style.setAttribute('data-plugin-css', 'dsh-image-question');
 			style.textContent = [
+				// Plugin-scoped theme variables. The bare selector carries the LIGHT
+				// branch, sampled point by point off `浅色主题-UI图.png`; the host's own
+				// `data-ds-dark-theme` marker on `body` selects the DARK branch, which
+				// is the frozen accepted baseline value for value. The marker is the
+				// host's RESOLVED theme, so `system` follows it for free.
+				'[data-dsh-image-question]{',
+				'--dsh-iq-surface-card:rgb(254,254,254);',
+				'--dsh-iq-surface-input:rgb(254,254,254);',
+				'--dsh-iq-surface-control:rgb(254,254,254);',
+				'--dsh-iq-border-control:rgb(227,230,235);',
+				'--dsh-iq-zoom-plate:rgba(254,254,254,.98);',
+				'--dsh-iq-zoom-plate-border:rgba(0,0,0,.06);',
+				'--dsh-iq-zoom-button:rgb(254,254,254);',
+				'--dsh-iq-label-caret:rgb(10,106,252);',
+				'--dsh-iq-notice-surface:rgba(254,254,254,.98)',
+				'}',
+				'body[data-ds-dark-theme] [data-dsh-image-question]{',
+				'--dsh-iq-surface-card:rgb(20,21,24);',
+				'--dsh-iq-surface-input:rgb(25,27,31);',
+				'--dsh-iq-surface-control:rgb(19,20,22);',
+				'--dsh-iq-border-control:rgb(44,46,49);',
+				'--dsh-iq-zoom-plate:rgba(22,23,26,.98);',
+				'--dsh-iq-zoom-plate-border:rgba(255,255,255,.06);',
+				'--dsh-iq-zoom-button:rgba(255,255,255,.03);',
+				'--dsh-iq-label-caret:rgb(120,190,235);',
+				'--dsh-iq-notice-surface:rgba(22,23,26,.98)',
+				'}',
 				'.dsh-iq-icon{transition:background-color .12s,color .12s}',
 				'.dsh-iq-icon:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14));color:var(--dsw-alias-label-primary,#101828)}',
 				'.dsh-iq-icon:disabled{color:var(--dsw-alias-label-dimmed,#98a2b3);cursor:default}',
 				// D2: the zoom buttons rest on a scoped fill so their `:hover` can win.
-				'.dsh-iq-zoom{background:rgba(255,255,255,.03)}',
+				'.dsh-iq-zoom{background:var(--dsh-iq-zoom-button)}',
 				'.dsh-iq-zoom:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}',
 				'.dsh-iq-seg{transition:background-color .12s,border-color .12s,color .12s}',
 				'.dsh-iq-seg:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.10))}',
@@ -649,9 +678,10 @@ window.__ModuleLoader__.load({
 			card: {
 				width: '100%',
 				maxWidth: 'var(--dsh-chat-content-width, 860px)',
-				// A1: the card is one dark surface from the figure, not the theme's
-				// own `--dsw-specific-input-major` (which reads rgb(44,44,46) here).
-				background: SURFACE_CARD,
+				// A1: the card takes the plugin's own surface token, so one card renders
+				// the figure's dark family on a dark host and the light sample on a light
+				// one — never a mix of the two.
+				background: 'var(--dsh-iq-surface-card)',
 				borderRadius: '16px',
 				boxShadow: 'var(--dsw-elevation-panel, 0 1px 2px rgba(16,24,40,0.06))',
 				color: 'var(--dsw-alias-label-primary, #101828)',
@@ -739,7 +769,8 @@ window.__ModuleLoader__.load({
 			 * notice: the card must not silently show an empty viewport when the view
 			 * token expired or the fetch failed (the M1/M5-accepted degraded state),
 			 * and the figure has no opinion about a failure state it never draws. Its
-			 * surface follows the plugin-owned dark family.
+			 * surface follows the same plugin-owned family as the zoom plate, which is
+			 * why it shares that plate's alpha and only differs by branch.
 			 */
 			imageErrorNotice: {
 				position: 'absolute',
@@ -750,7 +781,7 @@ window.__ModuleLoader__.load({
 				pointerEvents: 'none',
 				font: '10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace',
 				color: 'var(--dsw-alias-state-error-primary, #ff3b30)',
-				background: 'rgba(22,23,26,.98)',
+				background: 'var(--dsh-iq-notice-surface)',
 				borderRadius: '4px',
 				padding: '1px 6px',
 			},
@@ -788,9 +819,11 @@ window.__ModuleLoader__.load({
 				// figure reads 24.3 — while 98% lands on (23.4,24.4,27.3) = luminance 24.4,
 				// matching the figure's 6-point mean of 24.3 inside its 20.0-29.0 band. Over
 				// the card's dark surface (21,21,23) 98% lands on luminance 23.0, inside the
-				// figure's dark-side band of 20-23.
-				background: 'rgba(22,23,26,.98)',
-				border: '1px solid rgba(255,255,255,.06)',
+				// figure's dark-side band of 20-23. That plate, and the plate's own
+				// hairline, are the DARK branch of the two tokens below; the light
+				// branch is the `浅色主题-UI图.png` sample.
+				background: 'var(--dsh-iq-zoom-plate)',
+				border: '1px solid var(--dsh-iq-zoom-plate-border)',
 			},
 			zoomButton: {
 				width: '24px',
@@ -836,9 +869,10 @@ window.__ModuleLoader__.load({
 				gap: '4px',
 				padding: '5px 7px 6px',
 				borderRadius: '10px',
-				// A3: dark control on the dark card, with the figure's own hairline.
-				background: SURFACE_CONTROL,
-				border: '1px solid ' + BORDER_CONTROL,
+				// A3: the control takes the plugin's control surface, with the figure's
+				// own hairline — both from the branch the host theme selects.
+				background: 'var(--dsh-iq-surface-control)',
+				border: '1px solid var(--dsh-iq-border-control)',
 			},
 			swatch: {
 				display: 'flex',
@@ -860,7 +894,7 @@ window.__ModuleLoader__.load({
 				display: 'block',
 				flexShrink: 0,
 			},
-			swatchCaret: { color: LABEL_CARET, display: 'block' },
+			swatchCaret: { color: 'var(--dsh-iq-label-caret)', display: 'block' },
 			palettePanel: {
 				position: 'absolute',
 				top: 'calc(100% + 4px)',
@@ -869,11 +903,11 @@ window.__ModuleLoader__.load({
 				gap: '6px',
 				padding: '6px',
 				borderRadius: '10px',
-				// A5: the expanded palette belongs to the same dark family as the
-				// control that opens it — changing only the control body would leave
-				// this panel light (the reviewer's own addition to the list).
-				background: SURFACE_CONTROL,
-				border: '1px solid ' + BORDER_CONTROL,
+				// A5: the expanded palette belongs to the same family as the control
+				// that opens it, and now literally shares its tokens — the panel and the
+				// control can no longer drift apart (the reviewer's own addition).
+				background: 'var(--dsh-iq-surface-control)',
+				border: '1px solid var(--dsh-iq-border-control)',
 				boxShadow: 'var(--dsw-elevation-panel, 0 4px 12px rgba(16,24,40,.12))',
 				zIndex: 5,
 			},
@@ -905,9 +939,9 @@ window.__ModuleLoader__.load({
 				padding: '0 10px',
 				borderRadius: '8px',
 				border: '1px solid var(--dsw-alias-border-l2, #eaecf0)',
-				// A2: the note field is one step above the card, not the theme's
-				// light-grey overlay fill (rgb(97,102,107) on this theme).
-				background: SURFACE_INPUT,
+				// A2: the note field takes the plugin's own input token rather than the
+				// host overlay fill, which read as a light block on a dark card.
+				background: 'var(--dsh-iq-surface-input)',
 				color: 'inherit',
 				font: '13px/1.5 ui-sans-serif, system-ui, sans-serif',
 				boxSizing: 'border-box',

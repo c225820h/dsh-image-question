@@ -237,10 +237,24 @@ window.__ModuleLoader__.load({
 
 		/** One click of the zoom-in / zoom-out buttons. */
 		const ZOOM_BUTTON_FACTOR = 1.25;
-		/** On-screen brush width, authored in SOURCE pixels: the renderer divides
-		 * it by the live scale, which keeps the drawn stroke at ~2 CSS px. 需求4:
-		 * 6 -> 2 so a thin defect is no longer covered. */
-		const BRUSH_WIDTH_PX = 2;
+		/**
+		 * Brush size, in SCREEN CSS px: what the slider offers and what the nib
+		 * actually covers under the cursor, at any zoom level.
+		 *
+		 * 2026-10-11: this was a constant 2 CSS px line (需求4: "a thin defect must
+		 * no longer be covered"). The tool paints a REGION now, so the default went
+		 * up and the size became adjustable — a 2px line is not a smear.
+		 *
+		 * The committed mark stores SOURCE pixels (`screenPx / scale`), because that
+		 * is what the mask rasterizer divides by. Before this change the mark stored
+		 * the SCREEN value while the renderer divided it by the scale again, so a
+		 * stroke drawn on a fit-to-view image landed about 5x wider on screen than
+		 * the mask rasterized it. Storing source pixels is the fix; it is not a
+		 * cosmetic change to the rendering.
+		 */
+		const BRUSH_SCREEN_PX = 28;
+		const BRUSH_SCREEN_MIN_PX = 4;
+		const BRUSH_SCREEN_MAX_PX = 160;
 		/** A brush point is recorded only past this on-screen distance. */
 		const BRUSH_MIN_STEP_PX = 2;
 		/**
@@ -364,6 +378,9 @@ window.__ModuleLoader__.load({
 				note: '',
 				color: palette.indexOf(DEFAULT_COLOR) >= 0 ? DEFAULT_COLOR : palette[0],
 				activeTool: tools.indexOf('rect') >= 0 ? 'rect' : tools[0],
+				// Nib size in SCREEN CSS px, per question like every other draft
+				// field: the slider's value survives paging away and back.
+				brushPx: BRUSH_SCREEN_PX,
 				// A zoom ratio plus the source-space point held at the viewport centre:
 				// survives a resize, and restores verbatim when the user pages back.
 				view: {
@@ -419,6 +436,27 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * Resolve the pending question's close verb.
+		 *
+		 * The verb was renamed: `pending.cancel()`, which this card was authored
+		 * against, is now `pending.dismiss()`. A request carrying no tool-call
+		 * identity — exactly what this plugin sends, since it asks through
+		 * `userQuestions.ask()` rather than the timed tool path — dismisses
+		 * straight to the standard `ASK_CANCELLED` rejection, the same settlement
+		 * the old verb produced, so the rename is behavioural no-op here. Both
+		 * spellings are accepted so one artifact serves either DSH.
+		 *
+		 * @param pending - the chain's matched pending question, of unknown vintage.
+		 * @returns a bound no-argument closer, or null when it carries neither verb.
+		 */
+		function closePending(pending) {
+			if (pending === null || pending === undefined) return null;
+			if (typeof pending.dismiss === 'function') return () => pending.dismiss();
+			if (typeof pending.cancel === 'function') return () => pending.cancel();
+			return null;
+		}
+
+		/**
 		 * Strict takeover test. A false positive would steal a card this UI
 		 * cannot render, so every clause is a hard requirement:
 		 * `every` (not `some`) keeps mixed batches on the official flow, an
@@ -430,7 +468,7 @@ window.__ModuleLoader__.load({
 			if (!pending || typeof pending !== 'object') return false;
 			if (pending.kind !== 'question') return false;
 			if (typeof pending.answer !== 'function') return false;
-			if (typeof pending.cancel !== 'function') return false;
+			if (closePending(pending) === null) return false;
 			const questions = pending.questions;
 			if (!Array.isArray(questions) || questions.length === 0) return false;
 			return questions.every((question) => {
@@ -965,6 +1003,26 @@ window.__ModuleLoader__.load({
 				color: 'var(--dsw-alias-label-tertiary, #475467)',
 				whiteSpace: 'nowrap',
 			},
+			// The nib slider lives inside the 标注工具 group, right after 画笔. Its
+			// accent matches the submit button so the armed tool and its own control
+			// read as one thing.
+			brushSlider: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '2px' },
+			brushRange: {
+				width: '88px',
+				// Native appearance kept on purpose: `accentColor` repaints the
+				// platform track and thumb in one property, whereas `appearance: none`
+				// would strip the thumb too — and the ::-webkit-slider-thumb rules that
+				// repair it cannot be expressed in an inline style object.
+				accentColor: ACCENT,
+				cursor: 'pointer',
+			},
+			brushValue: {
+				fontSize: '12px',
+				color: 'var(--dsw-alias-label-tertiary, #475467)',
+				minWidth: '34px',
+				textAlign: 'right',
+				whiteSpace: 'nowrap',
+			},
 			divider: {
 				width: '1px',
 				// `UI图.png`: the two rules span y=968-1010 (43 image px) and
@@ -1082,7 +1140,10 @@ window.__ModuleLoader__.load({
 									type: 'button',
 									className: 'dsh-iq-icon',
 									title: '关闭',
-									onClick: () => { Promise.resolve(pending.cancel()).then(undefined, () => {}); },
+									onClick: () => {
+										const close = closePending(pending);
+										if (close !== null) Promise.resolve(close()).then(undefined, () => {});
+									},
 									style: styles.iconButton,
 								}, h(IconClose, { size: 16 }))
 							)
@@ -1470,11 +1531,17 @@ window.__ModuleLoader__.load({
 				const id = 'brush-' + nextIdRef.current;
 				nextIdRef.current += 1;
 				const ring = open.points.concat([open.points[0]]);
+				// The seal converts through the same screen->source rule as a free
+				// stroke, so a lasso and a smear made with the same nib commit the
+				// same source width.
+				const live = geometryRef.current === null || geometryRef.current.scale <= 0
+					? 1
+					: geometryRef.current.scale;
 				commitAnnotation({
 					id,
 					type: 'brush',
 					color: current.color,
-					width: BRUSH_WIDTH_PX,
+					width: current.brushPx / live,
 					points: ring.map((mark) => ({ x: mark.x, y: mark.y })),
 				});
 			};
@@ -1604,7 +1671,9 @@ window.__ModuleLoader__.load({
 							id,
 							type: 'brush',
 							color,
-							width: BRUSH_WIDTH_PX,
+							// Source pixels: the nib's screen size divided by the live
+							// scale. The mask rasterizer reads this value directly.
+							width: current.brushPx / live,
 							points: simplified.map((point) => ({ x: point.x, y: point.y })),
 						});
 					} else {
@@ -1781,7 +1850,9 @@ window.__ModuleLoader__.load({
 
 			const cancel = () => {
 				if (phase === 'submitting' || phase === 'done') return;
-				Promise.resolve(pending.cancel()).then(undefined, (error) => {
+				const close = closePending(pending);
+				if (close === null) return;
+				Promise.resolve(close()).then(undefined, (error) => {
 					setPhase('error');
 					setErrorText(error instanceof Error ? error.message : String(error));
 				});
@@ -1799,9 +1870,12 @@ window.__ModuleLoader__.load({
 						points: entry.points.map((point) => point.x + ',' + point.y).join(' '),
 						fill: 'none',
 						stroke: entry.color,
-						// Authored in source units so the on-screen stroke keeps a
-						// constant thickness at every zoom level.
-						strokeWidth: entry.width / scale,
+						// Source pixels, verbatim: `entry.width` IS the nib's source
+						// width, so the on-screen thickness scales with the view exactly
+						// like the mark does. The `/ scale` that used to sit here is
+						// what made a stroke land on screen ~5x wider than the same
+						// value rasterized in the mask.
+						strokeWidth: entry.width,
 						strokeLinecap: 'round',
 						strokeLinejoin: 'round',
 					}));
@@ -1824,7 +1898,9 @@ window.__ModuleLoader__.load({
 					points: brushPreview.map((point) => point.x + ',' + point.y).join(' '),
 					fill: 'none',
 					stroke: current.color,
-					strokeWidth: BRUSH_WIDTH_PX / scale,
+					// Preview width in source units, from the LIVE nib size, so the
+					// rubber-band stroke matches what `commitAnnotation` will store.
+					strokeWidth: current.brushPx / scale,
 					strokeLinecap: 'round',
 					strokeLinejoin: 'round',
 					opacity: 0.9,
@@ -1840,7 +1916,9 @@ window.__ModuleLoader__.load({
 						points: lasso.points.map((point) => point.x + ',' + point.y).join(' '),
 						fill: 'none',
 						stroke: current.color,
-						strokeWidth: BRUSH_WIDTH_PX / scale,
+						// The written part of a lasso IS the mark being drawn, so it
+						// carries the nib's width.
+						strokeWidth: current.brushPx / scale,
 						strokeLinecap: 'round',
 						strokeLinejoin: 'round',
 						opacity: 0.9,
@@ -1854,7 +1932,9 @@ window.__ModuleLoader__.load({
 							+ lasso.previewPoint.x + ',' + lasso.previewPoint.y,
 						fill: 'none',
 						stroke: current.color,
-						strokeWidth: BRUSH_WIDTH_PX / scale,
+						// The rubber band back to the cursor is a guide, not ink: it
+						// stays hairline whatever the nib is set to.
+						strokeWidth: 1.5 / scale,
 						strokeLinecap: 'round',
 						strokeLinejoin: 'round',
 						strokeDasharray: (6 / scale) + ' ' + (4 / scale),
@@ -1972,6 +2052,27 @@ window.__ModuleLoader__.load({
 				? null
 				: h('div', { style: styles.imageErrorNotice }, '取图失败：' + imageError);
 
+			// The nib slider rides with the brush tool only: a size control means
+			// nothing while 框选 is armed, and showing it just then keeps the footer
+			// from growing two controls wide. The value is screen CSS px — the width
+			// the nib covers under the cursor — and is converted to source pixels at
+			// commit time.
+			const brushSlider = activeTool !== 'brush' ? null : h('span', { style: styles.brushSlider },
+				h('input', {
+					type: 'range',
+					className: 'dsh-iq-brush',
+					min: String(BRUSH_SCREEN_MIN_PX),
+					max: String(BRUSH_SCREEN_MAX_PX),
+					step: '1',
+					value: String(current.brushPx),
+					title: '画笔大小（屏幕上覆盖的宽度）',
+					disabled: busy,
+					onChange: (event) => patchCurrentDraft({ brushPx: Number(event.target.value) }),
+					style: styles.brushRange,
+				}),
+				h('span', { style: styles.brushValue }, String(current.brushPx) + 'px')
+			);
+
 			const body = collapsed ? null : h('div', null,
 				h('div', { style: styles.imageRow },
 					h('div', {
@@ -2062,6 +2163,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: styles.groupLabel }, '标注工具'),
 						allowedTools.indexOf('rect') >= 0 ? toolSegment('rect', '框选', IconRectTool, current.color) : null,
 						allowedTools.indexOf('brush') >= 0 ? toolSegment('brush', '画笔', IconBrushTool) : null,
+						allowedTools.indexOf('brush') >= 0 ? brushSlider : null,
 						h('button', {
 							type: 'button',
 							className: 'dsh-iq-seg',
@@ -2136,10 +2238,11 @@ window.__ModuleLoader__.load({
 		 * here would leave a dead cell instead of falling back to the official card.
 		 * This card is therefore the visible, escapable outcome: it states the
 		 * failure, shows a bounded summary, and offers the one action that always
-		 * works, `pending.cancel()` (the standard ASK_CANCELLED path).
+		 * works, `closePending(pending)` (the standard ASK_CANCELLED path).
 		 *
-		 * It deliberately touches nothing but `styles`, one string and `cancel`: the
-		 * state that broke the real card must not be dereferenced a second time here.
+		 * It deliberately touches nothing but `styles`, one string and the closer:
+		 * the state that broke the real card must not be dereferenced a second
+		 * time here.
 		 */
 		function RenderFailureCard(props) {
 			const pending = props.pending;
@@ -2160,9 +2263,10 @@ window.__ModuleLoader__.load({
 								title: '关闭',
 								onClick: () => {
 									try {
-										Promise.resolve(pending.cancel()).then(undefined, () => {});
+										const close = closePending(pending);
+										if (close !== null) Promise.resolve(close()).then(undefined, () => {});
 									} catch {
-										// A cancel that throws synchronously is still not a render
+										// A close that throws synchronously is still not a render
 										// failure: swallow it so this card stays renderable.
 									}
 								},

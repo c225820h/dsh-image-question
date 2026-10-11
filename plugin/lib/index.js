@@ -24,6 +24,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { createInFlightGuard } from './concurrency.js';
 import { createViewTokenStore } from './token-store.js';
+import { writeAnnotationMasks } from './mask.js';
 
 const TOOL_NAME = 'ask_user_question_image';
 const REQUEST_SCHEMA = 'dsh.image-annotation.request/v1';
@@ -83,6 +84,48 @@ function failureOf(error) {
 		return { name: error.name, code: error.code, message: error.message };
 	}
 	return { name: 'Error', message: String(error) };
+}
+
+/**
+ * Attach mask files to the answers, when the caller asked for them.
+ *
+ * Deliberately after the answer is in hand, and per-answer: the human's work is
+ * already done by this point, so a failed write is reported as `mask_error` on
+ * that row instead of discarding it. Rows are written in order, not concurrently,
+ * so two questions sharing a directory cannot interleave.
+ *
+ * The raster size is the SOURCE size, which is what the marks are expressed in —
+ * a mask written at the stored (possibly downscaled) size would not line up with
+ * the file the user named.
+ *
+ * @param rows - the answer rows, mutated in place.
+ * @param request - raw `mask` argument from the tool call; anything else is a no-op.
+ * @param preparedById - per-question prepared state, carrying source dimensions.
+ */
+async function attachMasks(rows, request, preparedById) {
+	if (request === null || typeof request !== 'object') return;
+	const outDir = request.out_dir;
+	if (typeof outDir !== 'string' || outDir === '') return;
+	const stem = typeof request.name === 'string' && request.name !== '' ? request.name : undefined;
+	for (const row of rows) {
+		if (!Array.isArray(row.annotations) || row.annotations.length === 0) continue;
+		const item = preparedById.get(row.id);
+		if (item === undefined) continue;
+		const baseName = stem === undefined ? row.id : rows.length === 1 ? stem : `${stem}-${row.id}`;
+		try {
+			row.mask = await writeAnnotationMasks({
+				outDir,
+				baseName,
+				annotations: row.annotations,
+				width: item.dimensions.sourceWidth,
+				height: item.dimensions.sourceHeight,
+				shape: request.shape,
+				growPx: request.grow_px,
+			});
+		} catch (error) {
+			row.mask_error = failureOf(error);
+		}
+	}
 }
 
 /**
@@ -181,6 +224,12 @@ export function apply(ctx) {
 	ctx.effect(() => connectionOf(ctx).fetch.register({
 		path: VIEW_ROUTE_PATH,
 		methods: ['GET'],
+		// Required by the current Connection contract: the bridge reads this to
+		// decide how to build the Fetch request, and a GET route that omits it
+		// falls into the streaming branch, where constructing a body-bearing GET
+		// throws and the browser sees a bare 400 with no body at all. Every
+		// official GET route declares "buffered".
+		requestBody: 'buffered',
 		fetch: async (request) => {
 			const token = new URL(request.url).searchParams.get('token');
 			if (token === null || token === '') return new Response('not found', { status: 404 });
@@ -257,6 +306,31 @@ export function apply(ctx) {
 					type: 'number',
 					description: 'Optional deadline in milliseconds for the human answer. Defaults to 600000; on expiry the tool returns a timeout error instead of hanging the agent loop.',
 				},
+				mask: {
+					type: 'object',
+					additionalProperties: false,
+					required: ['out_dir'],
+					description: 'Optional: after the user submits, turn their marks into mask PNGs on disk and report the paths back. Sizes follow the SOURCE image, so a mask lines up with the file the user named.',
+					properties: {
+						out_dir: {
+							type: 'string',
+							description: 'Absolute directory to write the mask files into. It is created if missing; one file per shape per question.',
+						},
+						name: {
+							type: 'string',
+							description: 'Optional filename stem. Defaults to the question id. With several questions the id is appended to keep them distinct.',
+						},
+						shape: {
+							type: 'string',
+							enum: ['both', 'gray', 'alpha'],
+							description: 'Which flavour to write. "gray" (the default): greyscale PNG, white = selected — the one a LoadImageMask(channel="red") chain reads directly, so this is what you want unless the downstream node reads alpha. "alpha": RGBA PNG whose selected region is TRANSPARENT (ComfyUI LoadImage inverts alpha, so transparent is the region to change). The two are numerically opposite, so "both" writes them under distinct suffixes.',
+						},
+						grow_px: {
+							type: 'number',
+							description: 'Pixels added to every mark boundary before rasterizing, for a stroke that came back thinner than the area it stands for. Defaults to 0 (no growth).',
+						},
+					},
+				},
 			},
 		},
 		output: {
@@ -290,6 +364,8 @@ export function apply(ctx) {
 								source_path: { type: 'string', description: 'Host-side source path, echoed back for the model and never sent over the wire.' },
 								annotations: { type: 'array', items: { type: 'object' } },
 								raw_custom: { type: 'string' },
+								mask: { type: 'object', additionalProperties: true, description: 'Written mask files and the selected pixel count, present only when the request asked for a mask and the answer carried marks.' },
+								mask_error: { type: 'object', additionalProperties: true, description: 'Why the mask could not be written. The answer itself still stands.' },
 							},
 						},
 					},
@@ -411,8 +487,7 @@ export function apply(ctx) {
 					agent,
 					signal,
 				});
-				return {
-					answers: (answered?.answers ?? []).map((answer) => {
+				const rows = (answered?.answers ?? []).map((answer) => {
 						const custom = typeof answer.custom === 'string' ? answer.custom : undefined;
 						let parsed;
 						if (custom !== undefined) {
@@ -436,8 +511,9 @@ export function apply(ctx) {
 							...(item === undefined ? {} : { source_path: item.sourceImage }),
 							...(custom === undefined ? {} : { raw_custom: custom }),
 						};
-					}),
-				};
+					});
+				await attachMasks(rows, args?.mask, preparedById);
+				return { answers: rows };
 			} catch (error) {
 				// Admission failure and ask failure share one branch: both were reported
 				// to the model as data before, and both still are.

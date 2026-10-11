@@ -41,14 +41,29 @@
 4. **发起提问必须带 `exec.agent`**。不带 agent 的 request 走 agentless 瀑布，**根本不会被转发到浏览器**。
 5. 四条**不要**：不要伪造 `intent.kind`；不要把协议塞进 `detail`；不要抢 `user-questions/request` 的 listener（激活顺序不可依赖）；不要用未文档化的 `pendingInteractions` 接口。
 6. **原图尺寸**用 `ref.originalDimensions ?? ref.width`，不要自己实现 EXIF 方向规则（会与 DSH 不一致）。
-7. **关闭卡片**调 `pending.cancel()`（产生标准 `ASK_CANCELLED`），**不要**调 `delegate()`（那是 provider 路由语义）。
+7. **关闭卡片**经 `closePending(pending)`（`dismiss()` 优先、`cancel()` 兜底，语义都是标准 `ASK_CANCELLED`），**不要**调 `delegate()`（那是 provider 路由语义）。
+   **DSH 0.2.0-rc.2 起 `pending.cancel` 已改名 `pending.dismiss`**，且新版 `PendingQuestion` 上根本没有 `cancel` 成员——写死 `cancel` 会让 `isImageAnnotationPending` 整条 selector 直接返回 false，插件卡片永远不接管。改 API 时先 `grep` 官方 `dsh-client-ui-user-questions/lib/client.js`（`QuestionComposerProps` 消费者）确认方法名。
 8. **平台模块的来源**是 shell 的静态 seed 表，不在磁盘 node_modules 里，不要试图去安装它们。
+9. **`ctx.connection.fetch.register` 必须写 `requestBody`**。当前版本由它决定 Node bridge 如何构造 Fetch 请求：缺失时落到 streaming 分支，而带 body 的 GET 构造直接抛 TypeError，浏览器只看到**空 body 的 400**，handler 一次都不会被调用（本插件取图就死在这里）。GET 路由统一写 `requestBody: 'buffered'`。
+10. **`cordis.patch.yml` 的自注册行 name 用相对路径**（`'./lib/index.js'`），**不要**写包名。包名形态在 profile 安装（symlink）下会让 client-modules 静默解析不到包根 → host 半边照常工作、`client.js` 不进 bundle 批次 → 界面退回官方卡片，且**没有任何报错日志**。详见该文件内的注释。
+11. **标注落盘（蒙版）走 `lib/mask.js`**，零依赖手写 PNG：`node:zlib` 的 `deflateSync` + 自算 CRC32，IHDR/IDAT/IEND，每行 filter 0。
+    **默认 `shape` 是 `gray`，只写一个文件**（2026-10-11 用户要求）：它既是最常用的那种（`LoadImageMask(channel="red")` 直接吃），
+    也避免同一区域在磁盘上留两张**数值相反**的图给人拿错。`alpha` / `both` 仍可显式要，但别改回默认。
+    两个坑：① `gray`（白=要改）与 `alpha`（透明=要改）在数值上是**相反**的，混用得到一张反蒙版；
+    ② 该模块**只编码不解码**（写 JPEG 解码器不值得），所以 alpha 版的 RGB 是占位白，别以为里面装着原图。
+    `grow_px` 加在几何上（矩形外扩四边、笔迹加粗线宽），不做事后膨胀 —— 对矩形和圆头线，扩形状是精确的且只要一趟。
+    落盘失败按 `mask_error` 记在该题上，**不**作废已经拿到的答案。
+12. **画笔宽度：滑动条给的是 SCREEN CSS px，落笔时换算成源像素存进 `entry.width`**（`brushPx / scale`），渲染时直接 `strokeWidth: entry.width`。
+    **别在渲染时再除一次 `scale`**（2026-10-11 修过）：`strokeWidth: entry.width / scale` 让屏幕上的笔迹比蒙版里栅格化出来的宽约 5 倍 ——
+    1440 图缩到 299px 显示时 `scale ≈ 0.21`，存 2px 画出来是屏幕上 2px、源图上 9.6px，而蒙版只栅格化 2px。现在存的值与栅格化的值同源。
+    `BRUSH_SCREEN_PX`(28) / `BRUSH_SCREEN_MIN_PX`(4) / `BRUSH_SCREEN_MAX_PX`(160) 三个常量在 `client.js`；滑动条只在 `activeTool === 'brush'` 时渲染。
+    测试基准：1440 图在 299px 显示宽下（scale≈0.2076）涂一笔 28px，蒙版墨宽应为 **135 源像素**（竖直跨度 141px，笔迹倾角 16.7°）。
 
 ### 1.3 开发节奏
 
 - 严格按 `进度.md` 的里程碑 **M0 → M1 → M2 → …** 推进，**不跳级**。M0 未通过不写 M1 的界面。
 - 一个里程碑收尾 = **跑完该里程碑的验收标准** + **更新 `进度.md`**。只写代码不改进度，视为未完成。
-- **写完必须实测**：重启 `dsh web` + 真实触发一次，把观察到的结果记进进度文档。不许「写完即宣布完成」。
+- **写完必须实测**：`systemctl --user restart dsh-web` + 真实触发一次，把观察到的结果记进进度文档。不许「写完即宣布完成」。
 - **改动 `plugin/**` 后必须重跑审计自检入口**：`node 编排/verify/evidence/selfcheck/run.js`（**147 断言**，退出码 `0` = 全过；`--json` 给机器读，`--only=<id>` 定点复跑）。它是 M0–M5 各轮「跑完即删的临时自检」的固化产物（只读、零依赖、不进入插件包），用来补上「自检无可审计产物」这个长期缺口。**新发现的缺陷应先固化成该入口的一条断言，再动手修**（防回归）；反向对照（把修复退回去、断言必须失败）是证明断言有区分度的标准做法。
 - 验证要有**可复现的操作步骤**与**明确通过/失败判定**，不写「看起来正常」。
 
@@ -61,20 +76,38 @@
 
 ## 2. 环境操作
 
+**运行实例由 systemd user 服务托管，重启只有一条正确路径**（2026-10-11 实测）：
+
 ```bash
-# 安装（首次）
-# 1) 编辑 C:\Users\asus\.dsh\profiles\web\package.json
-#    dependencies 加:  "dsh-image-question": "link:D:/DSH-WorkSpace/dsh-image-user-question/plugin"
-#    dsh.profile.bundles 追加: "dsh-image-question"
-# 2) 装依赖
-cd /c/Users/asus/.dsh/profiles/web && pnpm install
-# 3) 重启
-dsh web
+systemctl --user restart dsh-web     # 唯一正确的重启方式
+systemctl --user status  dsh-web     # 看状态、Main PID、cgroup 成员
+journalctl --user -u dsh-web -f      # 看启动日志
 ```
 
-- **改了 host 半边**（`lib/index.js`、`cordis.patch.yml`）→ **重启 `dsh web`**
-- **改了 client 半边**（`client.js`）→ host 会快照 bundle 字节，内容变更须经 HMR；可靠做法同样是**重启**
-- **卸载/回滚**：删掉 profile 里那两行 → `pnpm install` → 重启
+unit 在 `~/.config/systemd/user/dsh-web.service`：`Restart=always` / `RestartSec=5` /
+`KillMode=control-group` / `WorkingDirectory=/home/openclaw`，另有 drop-in
+`dsh-web.service.d/comfyui-url.conf` 注入 `COMFYUI_URL`。
+
+**⚠️ 别用 `kill <pid>` + `nohup` 手动拉起**（2026-10-11 踩过）：那套只在没有服务托管时才成立。
+`KillMode=control-group` 意味着手动 kill 主进程后，systemd 会把**整个 cgroup**（包括你刚
+`setsid` 出来的重启脚本）一起清掉，脚本自己那句"拉起"永远执行不到；随后 `Restart=always`
+在 5 秒后由 systemd 拉起新实例。结果是能生效，但过程完全靠 systemd 兜底 —— 而一旦脚本
+逃过 cgroup 清理，就会留下一个野进程和受管实例抢 3080。改配置后一律走 `systemctl --user restart`。
+
+```bash
+# 安装（首次）
+# 1) 编辑 ~/.dsh/profiles/web/package.json
+#    dependencies 加:  "dsh-image-question": "link:/abs/path/to/plugin"
+#    dsh.profile.bundles 追加: "dsh-image-question"
+# 2) 装依赖
+cd ~/.dsh/profiles/web && pnpm install
+# 3) 重启
+systemctl --user restart dsh-web
+```
+
+- **改了 host 半边**（`lib/index.js`、`cordis.patch.yml`）→ `systemctl --user restart dsh-web`
+- **改了 client 半边**（`client.js`）→ host 会快照 bundle 字节，内容变更须经 HMR；可靠做法同样是 `systemctl --user restart dsh-web`
+- **卸载/回滚**：删掉 profile 里那两行 → `pnpm install` → `systemctl --user restart dsh-web`
 - **⚠️ 正式安装与 dev overlay（`--patch dev/patch.yml`）互斥**（2026-09-18 实测）：正式安装落地后再带 `--patch`，同一插件会被注册两次，`dsh web` **启动直接失败** ——`client-modules: package dsh-image-question resolves from multiple active Loader sources` + `connection: exact Fetch route "/api/image-question.view" is already registered`。要用 dev overlay 就先卸掉 profile 那两行；**已正式安装时直接用 `dsh --profile web --host 127.0.0.1 --port <port> --no-open` 启动**，保真覆盖由插件自带的 `cordis.patch.yml`（bundle 层）承担、实测同样生效。
 - **可复制的安装 / 更新 / 卸载步骤、生效判据与验证证据**：见 `安装与运维.md`。
 

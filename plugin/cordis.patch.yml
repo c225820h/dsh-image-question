@@ -21,4 +21,16 @@
     normalizedImageMaxBytes: 16777216
 - insert:
     - id: image-question
-      name: 'dsh-image-question'
+      # MUST stay a relative specifier, never the bare package name.
+      #
+      # client-modules resolves one package per Loader row before it will serve
+      # that package's browsable client bundle (dsh-client-modules
+      # `locatePkgJson`/`nearestPackage`). Given the bare name it asks the
+      # Loader to resolve it and, on a profile-installed (symlinked) copy,
+      # comes back empty — the row still mounts and the host half still works,
+      # but `client.js` is silently dropped from every bundle batch, so the
+      # browser keeps the official question card and the annotation UI never
+      # appears. A relative specifier takes the path-like branch instead, where
+      # the manifest is found by walking up from the resolved module, and the
+      # client half registers normally.
+      name: './lib/index.js'

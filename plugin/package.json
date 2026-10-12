@@ -1,7 +1,6 @@
 {
   "name": "dsh-image-question",
-  "version": "0.0.1",
-  "private": true,
+  "version": "1.0.0",
   "description": "DSH Web image-annotation question plugin: agent asks with an image, the browser annotates, the agent receives structured source-pixel results.",
   "type": "module",
   "main": "lib/index.js",
@@ -15,6 +14,20 @@
     "client.js",
     "cordis.patch.yml"
   ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "image-annotation",
+    "ask-user-question",
+    "mask",
+    "comfyui"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/c225820h/dsh-image-question.git",
+    "directory": "plugin"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

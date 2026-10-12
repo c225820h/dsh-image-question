@@ -112,13 +112,40 @@ Agent 判断不了的事情里，有很大一类必须由人看图：截图取�
 
 ## 4. 安装
 
-```bash
-# 在 profile 清单里加两处（~/.dsh/profiles/<profile>/package.json）
-#   dependencies:      "dsh-image-question": "link:/abs/path/to/dsh-image-question/plugin"
-#   dsh.profile.bundles: 追加 "dsh-image-question"
-cd ~/.dsh/profiles/<profile> && pnpm install
-dsh --profile <profile> --host 127.0.0.1 --port 3101 --no-open
+包在仓库的 `plugin/` 子目录里，所以安装 spec 必须带子目录路径：
+
 ```
+github:c225820h/dsh-image-question#path:/plugin
+```
+
+三种装法任选一种。区别只在「装包」和「启用」这两步谁来做 —— DSH 把它们分开了，装了不等于启用。
+
+**GUI（给人用）** —— 侧边栏「插件」页填上面的 spec。它是完整的：装包 + 写进 `dsh.profile.bundles`。
+
+**agent 侧** —— 让 agent 调用 `plugin_manager`，同样是完整的两步：
+
+```
+plugin_manager(action="install_bundle", target="github:c225820h/dsh-image-question#path:/plugin")
+```
+
+**CLI（脚本/高级用）**：
+
+```bash
+dsh plugin --profile web add "github:c225820h/dsh-image-question#path:/plugin"
+```
+
+⚠️ `dsh plugin` 只是 pnpm 的透传包装（`dsh plugin --help` 会直接把 pnpm 的帮助打出来），这条**只装包、不启用**。装完还得手动把 `"dsh-image-question"` 追加到 `~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles` 数组里，否则包在那儿但插件不挂载。
+
+装完重启：
+
+```bash
+systemctl --user restart dsh-web     # systemd 托管的实例
+# 或者直接重启你启动它的那个命令（如 dsh web）
+```
+
+**验证装成功了**：开个新会话，问 agent「你的工具列表里有没有 `ask_user_question_image`」。答有就成 —— 工具表里看不到它，说明 bundles 那一项没加上。
+
+**开发形态**：把依赖行换成 `link:/abs/path/to/dsh-image-question/plugin` 再 `pnpm install`，改代码重启即生效，不用 push。git 源装的是快照，改完得先 push 再重装。
 
 `plugin/package.json` 自带 `dsh.bundle` 与 `dsh.client` manifest，`cordis.patch.yml` 随插件一起生效，不需要额外传 `--patch`。
 
